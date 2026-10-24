@@ -1,0 +1,21 @@
+# Default experiment configuration (all values reproduce the results in reports/results.json)
+simulation:
+  n_episodes: 600          # simulated panels (each = one return-airway monitoring episode)
+  n_days: 20
+  step_min: 15
+  seed: 2026
+  noise_mult: 1.0
+  dropout_prob: 0.30
+  blast_prob: 0.80
+  co_gen_mult: 1.0
+  split_fracs: [0.60, 0.15, 0.25]     # train / val / test, stratified by episode type, split BY EPISODE
+alerting:
+  fa_budget_per_100_panel_days: 1.0   # false-alarm budget used to calibrate every detector
+  grace_hours: 6
+  refractory_hours: 12
+training:
+  tabular_stride: 3                   # use every 3rd step for XGBoost (adjacent steps are highly correlated)
+  rf_stride: 8
+  logreg_stride: 6
+  seq_epochs: 6
+  seq_windows_per_epoch: 60000

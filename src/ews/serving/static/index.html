@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Coal Self-Heating Early-Warning</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root{--bg:#10151c;--card:#1a222c;--tx:#e6edf3;--mu:#8b98a5;--ok:#2ea043;--l1:#d4a72c;--l2:#f0883e;--l3:#f85149;--ac:#58a6ff}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--tx)}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:12px 18px;background:var(--card);border-bottom:1px solid #2b3643}
+h1{font-size:18px;margin:0;flex:1 1 300px}select,button,input{background:#222c38;color:var(--tx);border:1px solid #33414f;border-radius:6px;padding:6px 10px}
+button{cursor:pointer;background:var(--ac);color:#04121f;font-weight:600;border:0}
+main{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:12px;padding:12px 18px}
+.card{background:var(--card);border-radius:10px;padding:12px;border:1px solid #2b3643}.card h3{margin:0 0 6px;font-size:13px;color:var(--mu);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.big{font-size:26px;font-weight:700}.row{display:flex;gap:12px;flex-wrap:wrap}.pill{padding:3px 10px;border-radius:99px;font-weight:700;color:#04121f}
+canvas{max-height:210px}#log{max-height:230px;overflow:auto;font-size:13px}#log div{padding:6px 0;border-bottom:1px solid #2b3643}
+.mu{color:var(--mu);font-size:12px}
+</style></head><body>
+<header><h1>Spontaneous-combustion early-warning &mdash; live simulated panel</h1>
+<select id="scn"></select><label class="mu">speed <input id="spd" type="number" value="25" min="1" max="200" style="width:64px"></label>
+<button id="go">Start</button><span id="conn" class="mu">idle</span></header>
+<main>
+<div class="card"><h3>ML stage</h3><div id="stage" class="big">&ndash;</div><div id="alert" class="pill" style="background:var(--ok)">No alert</div>
+<p class="mu" id="clock">day &ndash;</p><p class="mu" id="fault"></p></div>
+<div class="card"><h3>Risk gauge (0&ndash;100)</h3><canvas id="gauge" width="300" height="160"></canvas><div class="mu" id="idx"></div></div>
+<div class="card"><h3>ML vs fixed-threshold monitoring</h3><div class="row"><div><div class="mu">ML level</div><div id="mlLvl" class="big">0</div></div>
+<div><div class="mu">Fixed-threshold level</div><div id="bsLvl" class="big">0</div></div></div><p id="lead" class="mu">Lead time will appear when both reach level 2.</p></div>
+<div class="card"><h3>CO (ppm) &mdash; spikes are shot-firing fumes</h3><canvas id="cCO"></canvas></div>
+<div class="card"><h3>Oxygen deficiency (%) &amp; CH4 (%)</h3><canvas id="cO2"></canvas></div>
+<div class="card"><h3>Model probability P(stage &ge; k)</h3><canvas id="cP"></canvas></div>
+<div class="card"><h3>Simulation truth: hidden coal temperature (&deg;C)</h3><canvas id="cT"></canvas><div class="mu">Not available in a real mine &mdash; shown only to judge the model.</div></div>
+<div class="card" style="grid-column:1/-1"><h3>Explained alerts (top TreeSHAP features)</h3><div id="log"></div></div>
+</main>
+<script>
+const COL=['#2ea043','#d4a72c','#f0883e','#f85149'],MAXPTS=700;let es=null,t2={ml:null,bs:null},lastLvl=0;
+const mk=(id,sets)=>new Chart(document.getElementById(id),{type:'line',data:{labels:[],datasets:sets.map(s=>({data:[],borderWidth:1.4,pointRadius:0,...s}))},
+ options:{animation:false,scales:{x:{ticks:{color:'#8b98a5',maxTicksLimit:8},grid:{color:'#222c38'}},y:{ticks:{color:'#8b98a5'},grid:{color:'#222c38'}}},plugins:{legend:{labels:{color:'#8b98a5',boxWidth:10}}}}});
+const cCO=mk('cCO',[{label:'CO ppm',borderColor:'#58a6ff'}]),cO2=mk('cO2',[{label:'O2 deficiency %',borderColor:'#f0883e'},{label:'CH4 %',borderColor:'#8b98a5'}]),
+cP=mk('cP',[{label:'P(>=Incubation)',borderColor:COL[1]},{label:'P(>=Active)',borderColor:COL[2]},{label:'P(>=Fire)',borderColor:COL[3]}]),
+cT=mk('cT',[{label:'coal temp',borderColor:'#f85149'}]);
+const push=(c,lab,vals)=>{c.data.labels.push(lab);vals.forEach((v,i)=>c.data.datasets[i].data.push(v));if(c.data.labels.length>MAXPTS){c.data.labels.shift();c.data.datasets.forEach(d=>d.data.shift())}};
+function gauge(v){const g=document.getElementById('gauge'),x=g.getContext('2d');x.clearRect(0,0,300,160);const cx=150,cy=140,r=110;
+ [[0,.33,COL[0]],[.33,.66,COL[1]],[.66,1,COL[3]]].forEach(([a,b,c])=>{x.beginPath();x.strokeStyle=c;x.lineWidth=18;x.arc(cx,cy,r,Math.PI*(1+a),Math.PI*(1+b));x.stroke()});
+ const a=Math.PI*(1+v/100);x.beginPath();x.strokeStyle='#e6edf3';x.lineWidth=4;x.moveTo(cx,cy);x.lineTo(cx+(r-8)*Math.cos(a),cy+(r-8)*Math.sin(a));x.stroke();
+ x.fillStyle='#e6edf3';x.font='bold 22px system-ui';x.textAlign='center';x.fillText(v.toFixed(0),cx,cy-30)}
+function upd(m){const p=m.pred;if(!p.ready)return;const lab='d'+m.day.toFixed(1);
+ document.getElementById('stage').textContent=p.stage;const al=document.getElementById('alert');al.textContent=p.alert_label;al.style.background=COL[p.alert_level];
+ document.getElementById('clock').textContent='day '+m.day.toFixed(2);document.getElementById('fault').textContent=p.telemetry_fault?'⚠ '+p.message:'';
+ gauge(p.risk_score);const ix=p.indices;document.getElementById('idx').textContent='O2 def '+(ix.o2_deficiency_pct??'–').toFixed?.(2)+' % | CO make '+(ix.co_make_lpm??0).toFixed(1)+' L/min';
+ document.getElementById('mlLvl').textContent=p.alert_level;document.getElementById('bsLvl').textContent=p.baseline_level;
+ push(cCO,lab,[m.reading.co_ppm]);push(cO2,lab,[p.indices.o2_deficiency_pct,m.reading.ch4_pct]);
+ push(cP,lab,[p.p_at_least['1'],p.p_at_least['2'],p.p_at_least['3']]);push(cT,lab,[m.truth.coal_temp_c]);
+ ['ml','bs'].forEach(k=>{const lvl=k==='ml'?p.alert_level:p.baseline_level;if(lvl>=2&&t2[k]===null)t2[k]=m.day});
+ if(t2.ml!==null&&t2.bs!==null)document.getElementById('lead').textContent='Lead time at level 2: '+((t2.bs-t2.ml)*24).toFixed(1)+' h (ML earlier if positive)';
+ else if(t2.ml!==null)document.getElementById('lead').textContent='ML raised level 2 at day '+t2.ml.toFixed(2)+'; fixed thresholds have not yet.';
+ if(p.alert_level>lastLvl){const d=document.createElement('div');d.innerHTML='<b style="color:'+COL[p.alert_level]+'">'+p.alert_label+'</b> at day '+m.day.toFixed(2)+'<br><span class="mu">'+
+  p.explanation.map(e=>e.description+' ('+(e.value==null?'n/a':e.value.toFixed(2))+') '+(e.contribution>0?'↑':'↓')).join(' &middot; ')+'</span>';
+  document.getElementById('log').prepend(d)}lastLvl=p.alert_level;
+ [cCO,cO2,cP,cT].forEach(c=>c.update('none'))}
+fetch('/scenarios').then(r=>r.json()).then(s=>{const el=document.getElementById('scn');Object.entries(s).forEach(([k,v])=>{const o=document.createElement('option');o.value=k;o.textContent=k+' — '+v;el.appendChild(o)})});
+document.getElementById('go').onclick=()=>{if(es){es.close();es=null;document.getElementById('go').textContent='Start';document.getElementById('conn').textContent='stopped';return}
+ [cCO,cO2,cP,cT].forEach(c=>{c.data.labels=[];c.data.datasets.forEach(d=>d.data=[])});document.getElementById('log').innerHTML='';t2={ml:null,bs:null};lastLvl=0;
+ es=new EventSource('/stream/'+document.getElementById('scn').value+'?speed='+document.getElementById('spd').value);
+ es.onmessage=e=>upd(JSON.parse(e.data));es.addEventListener('end',()=>{es.close();es=null;document.getElementById('conn').textContent='finished';document.getElementById('go').textContent='Start'});
+ es.onopen=()=>document.getElementById('conn').textContent='streaming';document.getElementById('go').textContent='Stop'};
+</script></body></html>

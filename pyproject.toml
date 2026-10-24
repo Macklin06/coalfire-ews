@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coalfire-ews"
+version = "1.0.0"
+description = "Early-warning ML system for spontaneous combustion in underground coal mines (course project)"
+requires-python = ">=3.10"
+dependencies = ["numpy", "pandas", "scipy", "scikit-learn", "xgboost", "pyarrow", "pyyaml",
+                "fastapi", "uvicorn", "pydantic", "matplotlib", "shap"]
+
+[project.optional-dependencies]
+dl = ["torch"]
+dev = ["pytest", "httpx", "jupyter", "nbconvert"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+ews = ["serving/static/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
